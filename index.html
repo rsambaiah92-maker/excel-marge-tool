@@ -173,6 +173,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         <button class="btn-download" id="downloadBtn" onclick="downloadMergedFile()">Download Processed File</button>
     </div>
 
+    <div style="text-align:center; margin-top:12px;">
+        <button onclick="resetTool()" style="background:none; border:none; color:#a0aec0; font-size:13px; cursor:pointer; text-decoration:underline; padding:6px;">↺ Reset / Start Over</button>
+    </div>
+
     <div style="text-align:center; margin-top:20px;">
         <a href="https://forms.gle/zgSwec7HN2J2Ezej7" target="_blank" rel="noopener noreferrer"
            style="display:inline-block; padding:10px 22px; background:#fff; color:#2b6cb0; border:2px solid #2b6cb0; border-radius:6px; text-decoration:none; font-weight:bold; font-size:14px;">
@@ -292,6 +296,33 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             console.error(error);
             mapSection.style.display = 'none';
         }
+    }
+
+    // Reset everything back to the initial state
+    function resetTool() {
+        finalMergedData = [];
+        splitDataObj = {};
+
+        fileInput.value = '';
+        document.getElementById('dzFileList').innerHTML = '';
+        document.getElementById('columnMapSection').style.display = 'none';
+        document.getElementById('uniqueIdColumn').innerHTML = '';
+        document.getElementById('categoryColumn').innerHTML = '';
+
+        document.getElementById('removeDuplicates').checked = true;
+        document.getElementById('autoFormatSCNO').checked = true;
+        document.getElementById('addExtraColumns').checked = false;
+        document.getElementById('extraColumnNames').value = '';
+        document.getElementById('extraColumnNames').style.display = 'none';
+        document.getElementById('splitByArea').checked = false;
+
+        document.getElementById('outputFileName').value = 'Merged_Data';
+        document.getElementById('searchInput').value = '';
+
+        document.getElementById('previewSection').style.display = 'none';
+        document.getElementById('previewTableContainer').innerHTML = '';
+        document.getElementById('downloadBtn').style.display = 'none';
+        document.getElementById('status').innerText = '';
     }
 
     async function processExcelFiles() {
