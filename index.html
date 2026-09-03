@@ -471,7 +471,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                     let allRows = [];
                     // Read every sheet in the file, not just the first one
                     workbook.SheetNames.forEach(sheetName => {
-                        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { dateNF: 'yyyy-mm-dd' });
+                        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { dateNF: 'DD-MM-YYYY' });
                         // Format any Date objects as plain readable text
                         rows.forEach(row => {
                             for (let key in row) {
