@@ -283,7 +283,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             headers.forEach(h => {
                 const cleanKey = h.toLowerCase().replace(/[\s_\-.]/g, '');
                 if (cleanKey.includes('scno') || cleanKey.includes('serviceno') || cleanKey.includes('id')) guessedId = h;
-                if (cleanKey.includes('area') || cleanKey.includes('village') || cleanKey.includes('category') || cleanKey.includes('department') || cleanKey.includes('branch')) guessedCat = h;
+                if (cleanKey.includes('area') || cleanKey.includes('village') || cleanKey.includes('category') || cleanKey.includes('department') || cleanKey.includes('branch') || cleanKey.includes('mandal') || cleanKey.includes('distribution')) guessedCat = h;
 
                 idSelect.innerHTML += `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`;
                 catSelect.innerHTML += `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`;
@@ -376,7 +376,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                 for (let key in sampleRow) {
                     let cleanKey = key.toLowerCase().replace(/[\s_\-.]/g, '');
                     if (cleanKey.includes('scno') || cleanKey.includes('serviceno')) scKey = key;
-                    if (cleanKey.includes('area') || cleanKey.includes('village')) areaKey = key;
+                    if (cleanKey.includes('area') || cleanKey.includes('village') || cleanKey.includes('mandal') || cleanKey.includes('distribution')) areaKey = key;
                 }
                 if (!scKey) scKey = Object.keys(sampleRow)[0]; // Fallback to first column
             }
@@ -400,7 +400,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                     
                     if(scValue.includes("-") && areaValue) {
                         let prefix = scValue.split("-")[0];
-                        row['Formatted_SC'] = `${prefix}-${areaValue}`;
+                        if (areaValue.startsWith(prefix + "-")) {
+                            row['Formatted_SC'] = areaValue;
+                        } else {
+                            row['Formatted_SC'] = `${prefix}-${areaValue}`;
+                        }
                     } else if (scValue && areaValue) {
                         row['Formatted_SC'] = `${scValue}-${areaValue}`;
                     }
@@ -466,22 +470,100 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             reader.onload = (e) => {
                 try {
                     const data = new Uint8Array(e.target.result);
-                    // cellDates:true makes Excel dates come through as real dates, not serial numbers
-                    const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-                    let allRows = [];
-                    // Read every sheet in the file, not just the first one
-                    workbook.SheetNames.forEach(sheetName => {
-                        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { dateNF: 'DD-MM-YYYY' });
-                        // Format any Date objects as plain readable text
-                        rows.forEach(row => {
-                            for (let key in row) {
-                                if (row[key] instanceof Date) {
-                                    row[key] = row[key].toISOString().split('T')[0];
-                                }
-                            }
-                        });
-                        allRows = allRows.concat(rows);
+
+                    // Detect if the file is an HTML table (many government portals export HTML tables as .xls)
+                    const checkLen = Math.min(data.length, 2048);
+                    let headerChunk = "";
+                    for (let i = 0; i < checkLen; i++) {
+                        headerChunk += String.fromCharCode(data[i]);
+                    }
+                    const isHtml = /<\s*(?:!doctype|html|table|form|caption|tr|thead)/i.test(headerChunk);
+
+                    // For HTML files, NEVER use cellDates:true because SheetJS will misidentify SCNO strings
+                    // like "04122-00001" (as YYYY-MM) and meter capacities like "5-30" as Dates,
+                    // and will shift actual dates by -1 day due to timezone differences.
+                    // For binary XLSX/XLS, cellDates:true converts Excel date serial numbers to Date objects.
+                    const workbook = XLSX.read(data, { 
+                        type: 'array', 
+                        cellDates: !isHtml,
+                        raw: isHtml 
                     });
+
+                    let allRows = [];
+                    // Read every sheet in the file
+                    workbook.SheetNames.forEach(sheetName => {
+                        const sheet = workbook.Sheets[sheetName];
+                        if (!sheet || !sheet['!ref']) return;
+
+                        // 1. Read sheet as 2D array of raw values
+                        const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+                        if (!rawRows || rawRows.length === 0) return;
+
+                        // 2. Locate the real header row (skips top captions, titles, empty rows)
+                        let headerRowIdx = 0;
+                        let maxCols = 0;
+
+                        for (let r = 0; r < Math.min(rawRows.length, 25); r++) {
+                            const row = rawRows[r];
+                            if (!Array.isArray(row)) continue;
+                            const filled = row.filter(c => c !== null && c !== undefined && String(c).trim() !== "").length;
+                            if (filled > maxCols && filled >= 2) {
+                                maxCols = filled;
+                                headerRowIdx = r;
+                            }
+                        }
+
+                        // Build clean, unique column headers
+                        const headerRow = rawRows[headerRowIdx] || [];
+                        const headers = [];
+                        const seenHeaders = {};
+
+                        for (let c = 0; c < headerRow.length; c++) {
+                            let h = String(headerRow[c] || "")
+                                .replace(/<[^>]+>/g, ' ')
+                                .replace(/[\r\n\t]+/g, ' ')
+                                .replace(/\s+/g, ' ')
+                                .trim();
+
+                            if (!h) h = `Column_${c + 1}`;
+                            if (seenHeaders[h]) {
+                                seenHeaders[h]++;
+                                h = `${h}_${seenHeaders[h]}`;
+                            } else {
+                                seenHeaders[h] = 1;
+                            }
+                            headers.push(h);
+                        }
+
+                        // 3. Convert data rows into objects
+                        for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+                            const row = rawRows[r];
+                            if (!row || row.length === 0) continue;
+
+                            let hasData = false;
+                            const rowObj = {};
+                            for (let c = 0; c < headers.length; c++) {
+                                let val = row[c];
+                                if (val instanceof Date) {
+                                    // Use UTC methods for XLSX serial dates to avoid IST (-1 day) timezone shift
+                                    const y = isHtml ? val.getFullYear() : val.getUTCFullYear();
+                                    const m = String((isHtml ? val.getMonth() : val.getUTCMonth()) + 1).padStart(2, '0');
+                                    const d = String(isHtml ? val.getDate() : val.getUTCDate()).padStart(2, '0');
+                                    val = `${y}-${m}-${d}`;
+                                } else if (val !== undefined && val !== null) {
+                                    val = String(val).trim();
+                                } else {
+                                    val = "";
+                                }
+                                if (val !== "") hasData = true;
+                                rowObj[headers[c]] = val;
+                            }
+                            if (hasData) {
+                                allRows.push(rowObj);
+                            }
+                        }
+                    });
+
                     resolve(allRows);
                 } catch (err) {
                     reject(err);
