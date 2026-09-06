@@ -199,62 +199,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 <script>
     let finalMergedData = [];
     let splitDataObj = {}; // For area wise split
-    let globalColumnMeta = {}; // Stores detected column types & formats
-
-    // Helper to detect Date columns by header name
-    function isDateColumn(header) {
-        if (!header) return false;
-        const h = String(header).toLowerCase().trim();
-        return /(?:date|month|(?:^|[_\s\-.])dt(?:$|[_\s\-.])|_dt$|^dt_)/i.test(h);
-    }
-
-    // Helper to detect Amount / Money columns by header name
-    function isAmountColumn(header) {
-        if (!header) return false;
-        const h = String(header).toLowerCase().trim();
-        if (isDateColumn(header)) return false; // Date takes precedence (e.g. 'Payment Date', 'Due Date')
-        return /(?:amount|money|arrear|balance|due|total|charge|payment|tariff|subsidy|rebate|penalty|interest|tax|gst|cess|duty|discount|fee|cost|price)/i.test(h);
-    }
-
-    // Helper to detect ID columns that must preserve leading zeros and formatting
-    function isIdColumn(header, scKey) {
-        if (!header) return false;
-        if (scKey && header === scKey) return true;
-        const c = String(header).toLowerCase().replace(/[\s_\-.]/g, '');
-        return c.includes('scno') || c.includes('serviceno') || c.includes('consumerno') || 
-               c.includes('account') || c.includes('meterno') || c.includes('mobile') || 
-               c.includes('phone') || c.includes('aadhaar') || c.includes('uid') || c.includes('uscno');
-    }
-
-    // Convert numeric-looking strings (e.g. "1,234.50", "₹1234.50", "(500.00)") into true JavaScript numbers
-    function parseAmountValue(val) {
-        if (val === null || val === undefined || val === '') return null;
-        if (typeof val === 'number') {
-            return (!isNaN(val) && isFinite(val)) ? val : null;
-        }
-        let str = String(val).trim();
-        if (!str || str === '-' || str.toLowerCase() === 'null' || str.toLowerCase() === 'na' || str.toLowerCase() === 'n/a' || str.toLowerCase() === 'nil') return null;
-
-        let isNegative = false;
-        if (str.startsWith('(') && str.endsWith(')')) {
-            isNegative = true;
-            str = str.slice(1, -1).trim();
-        }
-
-        str = str.replace(/(?:₹|rs\.?|inr|usd|\$|€|£)/gi, '')
-                 .replace(/,/g, '')
-                 .trim();
-
-        if (isNegative && !str.startsWith('-')) {
-            str = '-' + str;
-        }
-
-        if (/^-?\d+(?:\.\d+)?$/.test(str)) {
-            const num = parseFloat(str);
-            return (!isNaN(num) && isFinite(num)) ? num : null;
-        }
-        return null;
-    }
+    let globalColumnFormats = {}; // Stores preserved cell formats (e.g. #,##0.00, dd-mm-yyyy) per column
 
     // Convert date strings / numbers into UTC JavaScript Date objects (avoids timezone shift)
     function parseDateValue(val) {
@@ -424,7 +369,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     function resetTool() {
         finalMergedData = [];
         splitDataObj = {};
-        globalColumnMeta = {};
+        globalColumnFormats = {};
 
         fileInput.value = '';
         document.getElementById('dzFileList').innerHTML = '';
@@ -659,48 +604,25 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                             headers.push(h);
                         }
 
-                        // Detect column types and inspect cell formats from source sheet
-                        for (let c = 0; c < headers.length; c++) {
-                            const h = headers[c];
-                            let colType = 'general';
-                            let colFmt = '';
-
-                            if (isDateColumn(h)) {
-                                colType = 'date';
-                                colFmt = 'dd-mm-yyyy';
-                            } else if (isAmountColumn(h)) {
-                                colType = 'amount';
-                                colFmt = '#,##0.00';
-                            }
-
-                            // Check if source cells in binary Excel had a specific format or date/number type
-                            for (let r = headerRowIdx + 1; r < Math.min(rawRows.length, headerRowIdx + 50); r++) {
-                                const cellAddr = XLSX.utils.encode_cell({ r: r, c: c });
-                                const cellObj = sheet[cellAddr];
-                                if (cellObj) {
-                                    if (cellObj.z && cellObj.z !== 'General' && !colFmt) {
-                                        colFmt = cellObj.z;
+                        // Preserve column-level number/date formats from source sheet
+                        if (sheet && sheet['!ref']) {
+                            const range = XLSX.utils.decode_range(sheet['!ref']);
+                            for (let c = 0; c < headers.length; c++) {
+                                const h = headers[c];
+                                if (!globalColumnFormats[h]) {
+                                    for (let r = headerRowIdx + 1; r <= Math.min(range.e.r, headerRowIdx + 50); r++) {
+                                        const cellAddr = XLSX.utils.encode_cell({ r: r, c: c });
+                                        const cellObj = sheet[cellAddr];
+                                        if (cellObj && cellObj.z && cellObj.z !== 'General') {
+                                            globalColumnFormats[h] = cellObj.z;
+                                            break;
+                                        }
                                     }
-                                    if (cellObj.t === 'd' && colType === 'general') {
-                                        colType = 'date';
-                                        if (!colFmt) colFmt = cellObj.z || 'dd-mm-yyyy';
-                                    }
-                                }
-                            }
-
-                            if (!globalColumnMeta[h]) {
-                                globalColumnMeta[h] = { type: colType, format: colFmt };
-                            } else {
-                                if (colType !== 'general' && globalColumnMeta[h].type === 'general') {
-                                    globalColumnMeta[h].type = colType;
-                                }
-                                if (colFmt && !globalColumnMeta[h].format) {
-                                    globalColumnMeta[h].format = colFmt;
                                 }
                             }
                         }
 
-                        // 3. Convert data rows into objects
+                        // 3. Convert data rows into objects - PRESERVE ORIGINAL DATA TYPE FOR EACH CELL
                         for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
                             const row = rawRows[r];
                             if (!row || row.length === 0) continue;
@@ -709,41 +631,38 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                             const rowObj = {};
                             for (let c = 0; c < headers.length; c++) {
                                 const h = headers[c];
-                                const meta = globalColumnMeta[h] || {};
                                 let val = row[c];
 
-                                if (meta.type === 'date' || isDateColumn(h)) {
-                                    if (val instanceof Date) {
-                                        val = parseDateValue(val);
-                                    } else if (val !== undefined && val !== null && String(val).trim() !== '') {
-                                        const parsed = parseDateValue(val);
-                                        val = parsed !== null ? parsed : String(val).trim();
-                                    } else {
+                                if (val instanceof Date) {
+                                    // Original cell is a Date -> preserve as Date!
+                                    // Normalize to UTC Date so Excel doesn't shift the date by -1 day due to timezone
+                                    if (!isNaN(val.getTime())) {
+                                        val = new Date(Date.UTC(val.getUTCFullYear(), val.getUTCMonth(), val.getUTCDate(), val.getUTCHours(), val.getUTCMinutes(), val.getUTCSeconds()));
+                                    }
+                                } else if (typeof val === 'number') {
+                                    // Original cell is a Number -> preserve as Number! (NEVER convert to String!)
+                                    if (isNaN(val) || !isFinite(val)) {
                                         val = "";
                                     }
-                                } else if (meta.type === 'amount' || isAmountColumn(h)) {
-                                    if (typeof val === 'number') {
-                                        val = (!isNaN(val) && isFinite(val)) ? val : "";
-                                    } else if (val !== undefined && val !== null && String(val).trim() !== '') {
-                                        const parsed = parseAmountValue(val);
-                                        val = parsed !== null ? parsed : String(val).trim();
-                                    } else {
-                                        val = "";
+                                } else if (typeof val === 'string') {
+                                    val = val.trim();
+                                    // For HTML tables (where all cells are strings by default):
+                                    if (isHtml && val !== '') {
+                                        // Convert clean numbers to Number, avoiding codes with hyphens or IDs with leading zeros
+                                        if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(val)) {
+                                            const num = parseFloat(val);
+                                            if (!isNaN(num) && isFinite(num)) {
+                                                val = num;
+                                            }
+                                        } else if (/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}$/.test(val) || /^\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}$/.test(val)) {
+                                            const parsedDt = parseDateValue(val);
+                                            if (parsedDt) val = parsedDt;
+                                        }
                                     }
-                                } else if (isIdColumn(h)) {
-                                    // ID columns: strictly preserve as string to keep leading zeros & hyphens intact
-                                    val = (val !== undefined && val !== null) ? String(val).trim() : "";
-                                } else {
-                                    // General column: preserve numbers & dates without forcing string conversion
-                                    if (val instanceof Date) {
-                                        val = parseDateValue(val);
-                                    } else if (typeof val === 'number') {
-                                        val = (!isNaN(val) && isFinite(val)) ? val : "";
-                                    } else if (val !== undefined && val !== null) {
-                                        val = String(val).trim();
-                                    } else {
-                                        val = "";
-                                    }
+                                } else if (typeof val === 'boolean') {
+                                    // Original cell is a Boolean -> preserve as Boolean
+                                } else if (val === null || val === undefined) {
+                                    val = "";
                                 }
 
                                 if (val !== "" && val !== null && val !== undefined) hasData = true;
@@ -770,10 +689,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         let html = '<table id="previewTable"><thead><tr>';
         const headers = Object.keys(data[0]);
         headers.forEach(h => {
-            let thClass = '';
-            if (isAmountColumn(h)) thClass = ' class="text-right"';
-            else if (isDateColumn(h)) thClass = ' class="text-center"';
-            html += `<th${thClass}>${escapeHtml(h)}</th>`;
+            html += `<th>${escapeHtml(h)}</th>`;
         });
         html += '</tr></thead><tbody>';
         
@@ -793,12 +709,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
                     displayVal = `${d}-${m}-${y}`;
                     cellClass = 'text-center';
                 } else if (typeof val === 'number') {
-                    displayVal = val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    displayVal = String(val);
                     cellClass = 'text-right';
                 } else if (val !== undefined && val !== null) {
                     displayVal = escapeHtml(val);
-                    if (isAmountColumn(h)) cellClass = 'text-right';
-                    else if (isDateColumn(h)) cellClass = 'text-center';
                 }
                 html += `<td class="${cellClass}">${displayVal}</td>`;
             });
@@ -825,7 +739,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         }
     }
 
-    function createFormattedWorksheet(data, columnMeta) {
+    function createFormattedWorksheet(data, columnFormats = {}) {
+        // json_to_sheet creates cells matching each value's JS type:
+        // - number -> t: 'n'
+        // - Date (with cellDates: true) -> t: 'd'
+        // - string -> t: 's'
+        // - boolean -> t: 'b'
         const ws = XLSX.utils.json_to_sheet(data, { cellDates: true });
         if (!ws || !ws['!ref']) return ws;
 
@@ -837,42 +756,20 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             headers.push(cell ? String(cell.v) : '');
         }
 
+        // Apply preserved formats (e.g. date format dd-mm-yyyy or custom number format from source)
         for (let C = range.s.c; C <= range.e.c; ++C) {
             const header = headers[C];
-            const meta = (columnMeta && columnMeta[header]) || {};
-            const isAmt = meta.type === 'amount' || isAmountColumn(header);
-            const isDt = meta.type === 'date' || isDateColumn(header);
-            const customFormat = meta.format;
+            const preservedFmt = columnFormats[header];
 
             for (let R = range.s.r + 1; R <= range.e.r; ++R) {
                 const addr = XLSX.utils.encode_cell({ r: R, c: C });
                 const cell = ws[addr];
                 if (!cell) continue;
 
-                if (isAmt) {
-                    if (cell.t === 's') {
-                        const parsed = parseAmountValue(cell.v);
-                        if (parsed !== null) {
-                            cell.t = 'n';
-                            cell.v = parsed;
-                        }
-                    }
-                    if (cell.t === 'n') {
-                        cell.z = customFormat || '#,##0.00';
-                    }
-                } else if (isDt) {
-                    if (cell.t === 's') {
-                        const parsed = parseDateValue(cell.v);
-                        if (parsed !== null) {
-                            cell.t = 'd';
-                            cell.v = parsed;
-                        }
-                    }
-                    if (cell.t === 'd' || cell.t === 'n') {
-                        cell.z = customFormat || 'dd-mm-yyyy';
-                    }
-                } else if (customFormat && (cell.t === 'n' || cell.t === 'd')) {
-                    cell.z = customFormat;
+                if (cell.t === 'd') {
+                    cell.z = preservedFmt || 'dd-mm-yyyy';
+                } else if (cell.t === 'n' && preservedFmt) {
+                    cell.z = preservedFmt;
                 }
             }
         }
@@ -892,12 +789,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             for (let area in splitDataObj) {
                 // Ensure sheet name is valid (max 31 chars, no special characters)
                 let safeSheetName = area.replace(/[\\/?*\[\]]/g, '').substring(0, 31);
-                const sheet = createFormattedWorksheet(splitDataObj[area], globalColumnMeta);
+                const sheet = createFormattedWorksheet(splitDataObj[area], globalColumnFormats);
                 XLSX.utils.book_append_sheet(newWorkbook, sheet, safeSheetName || "Data");
             }
         } else {
             // Single Sheet
-            const sheet = createFormattedWorksheet(finalMergedData, globalColumnMeta);
+            const sheet = createFormattedWorksheet(finalMergedData, globalColumnFormats);
             XLSX.utils.book_append_sheet(newWorkbook, sheet, "All_Data");
         }
         
